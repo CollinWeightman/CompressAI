@@ -46,6 +46,7 @@ from compressai.zoo import image_models
 from PIL import Image
 from pytorch_msssim import ms_ssim
 import math
+import time
 
 class AverageMeter:
     """Compute running average."""
@@ -274,7 +275,7 @@ def compute_bpp(out_net):
     return sum(torch.log(likelihoods).sum() / (-math.log(2) * num_pixels)
               for likelihoods in out_net['likelihoods'].values()).item()
 
-def eval_image(net, img_path):
+def eval_image(net, img_path, time_hr):
     device = next(net.parameters()).device
     img = Image.open(img_path).convert('RGB')
     x = transforms.ToTensor()(img).unsqueeze(0).to(device = device)
@@ -285,7 +286,7 @@ def eval_image(net, img_path):
     msssim = compute_msssim(x, out_net["x_hat"])
     bitrate = compute_bpp(out_net)
     
-    log_s = f"PSNR, {psnr}, MS-SSIM, {msssim}, BPP, {bitrate}\n"
+    log_s = f"PSNR, {psnr}, MS-SSIM, {msssim}, BPP, {bitrate}, time(h), {time_hr}\n"
     with open('log.csv', 'a') as f:
         f.write(log_s)
 
@@ -336,17 +337,15 @@ def main(argv):
 
         optimizer, aux_optimizer = configure_optimizers(net, args)
         lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", eps = 1e-9)
-        lmbda = mse_lmbda[i]
-        
+        lmbda = mse_lmbda[i]        
         criterion = RateDistortionLoss(lmbda=lmbda)
 
         last_epoch = 0
         best_loss = float("inf")
+        
+        time_start = time.time()
         for epoch in range(last_epoch, args.epochs):
             print(f"Learning rate: {optimizer.param_groups[0]['lr']}")
-            if optimizer.param_groups[0]['lr'] < 1e-8:
-                eval_image(net, args.eval_image)
-                break
             train_one_epoch(
                 net,
                 criterion,
@@ -375,6 +374,12 @@ def main(argv):
                     is_best,
                     f'quality_{i+1}'
                 )
+                
+            if optimizer.param_groups[0]['lr'] < 1e-8:
+                break
+        time_end = time.time()
+        time_hr = (time_end - time_start) / 3600
+        eval_image(net, args.eval_image, time_hr)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
