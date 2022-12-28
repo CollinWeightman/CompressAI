@@ -152,6 +152,7 @@ def test_epoch(epoch, test_dataloader, model, criterion):
     bpp_loss = AverageMeter()
     mse_loss = AverageMeter()
     aux_loss = AverageMeter()
+    psnr_score = AverageMeter()
 
     with torch.no_grad():
         for d in test_dataloader:
@@ -163,15 +164,19 @@ def test_epoch(epoch, test_dataloader, model, criterion):
             bpp_loss.update(out_criterion["bpp_loss"])
             loss.update(out_criterion["loss"])
             mse_loss.update(out_criterion["mse_loss"])
+            psnr_score.update(compute_psnr(out_net["x_hat"], d))
 
     print(
         f"Test epoch {epoch}: Average losses:"
         f"\tLoss: {loss.avg:.3f} |"
         f"\tMSE loss: {mse_loss.avg:.3f} |"
         f"\tBpp loss: {bpp_loss.avg:.2f} |"
-        f"\tAux loss: {aux_loss.avg:.2f}\n"
-    )            
-
+        f"\tAux loss: {aux_loss.avg:.2f} |"
+        f"\tPSNR score: {psnr_score.avg:.2f}\n"        
+    )    
+    log_s = f'{loss.avg}, {mse_loss.avg}, {bpp_loss.avg}, {aux_loss.avg}, {psnr_score.avg}\n'
+    with open('log_training.csv', 'a') as f:
+        f.write(log_s)
     return loss.avg
 
 
@@ -180,6 +185,7 @@ def save_checkpoint(state, is_best, filename):
     if is_best:
         shutil.copyfile(f"{filename}.pth.tar", f"{filename}_best.pth.tar")
 
+# +
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="Example training script.")
     parser.add_argument(
@@ -217,6 +223,21 @@ def parse_args(argv):
         default=4,
         help="Dataloaders threads (default: %(default)s)",
     )
+    parser.add_argument(
+        "-i",
+        "--iterations",
+        type=int,
+        default=8,
+        help="Exeute iterations (default: %(default)s)",
+    )
+    parser.add_argument(
+        "-if",
+        "--iterations-from",
+        type=int,
+        default=1,
+        help="Exeute iterations start from (default: %(default)s)",
+    )
+    
 #     parser.add_argument(
 #         "--lambda",
 #         dest="lmbda",
@@ -262,6 +283,9 @@ def parse_args(argv):
     args = parser.parse_args(argv)
     return args
 
+
+# -
+
 def compute_psnr(a, b):
     mse = torch.mean((a - b)**2).item()
     return -10 * math.log10(mse)
@@ -275,7 +299,7 @@ def compute_bpp(out_net):
     return sum(torch.log(likelihoods).sum() / (-math.log(2) * num_pixels)
               for likelihoods in out_net['likelihoods'].values()).item()
 
-def eval_image(net, img_path, time_hr):
+def eval_image(net, img_path, time_min):
     device = next(net.parameters()).device
     img = Image.open(img_path).convert('RGB')
     x = transforms.ToTensor()(img).unsqueeze(0).to(device = device)
@@ -286,8 +310,8 @@ def eval_image(net, img_path, time_hr):
     msssim = compute_msssim(x, out_net["x_hat"])
     bitrate = compute_bpp(out_net)
     
-    log_s = f"PSNR, {psnr}, MS-SSIM, {msssim}, BPP, {bitrate}, time(h), {time_hr}\n"
-    with open('log.csv', 'a') as f:
+    log_s = f"PSNR, {psnr}, MS-SSIM, {msssim}, BPP, {bitrate}, time(m), {time_min}\n"
+    with open('log_convergence.csv', 'a') as f:
         f.write(log_s)
 
 def main(argv):
@@ -326,18 +350,22 @@ def main(argv):
         pin_memory=(device == "cuda"),
     )
 
-    mse_lmbda = [0.0018, 0.0035, 0.0067, 0.013, 0.025, 0.0483, 0.0932, 0.18]
-    
-    for i in range(8):
-        net = image_models[args.model](quality=3)
+    mse_lmbda = [0.0018, 0.0035, 0.0067, 0.0130, 0.0250, 0.0483, 0.0932, 0.1800]
+    start_quality = args.iterations_from - 1
+    for i in range(start_quality, start_quality + args.iterations):
+        log_s = f'loss, mse, bpp, aux, psnr\n'
+        with open('log_training.csv', 'a') as f:
+            f.write(log_s)
+        
+        net = image_models[args.model](quality=i+1)
         net = net.to(device)
 
         if args.cuda and torch.cuda.device_count() > 1:
             net = CustomDataParallel(net)
 
         optimizer, aux_optimizer = configure_optimizers(net, args)
-        lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", eps = 1e-9)
-        lmbda = mse_lmbda[i]        
+        lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", eps = 1e-9, cooldown = 10, verbose = True)
+        lmbda = mse_lmbda[i]
         criterion = RateDistortionLoss(lmbda=lmbda)
 
         last_epoch = 0
@@ -374,12 +402,15 @@ def main(argv):
                     is_best,
                     f'quality_{i+1}'
                 )
-                
+            # End condition
             if optimizer.param_groups[0]['lr'] < 1e-8:
                 break
+            # To prevent initial training oscillation from causing the best loss value to be too low
+            if epoch == 10:
+                lr_scheduler._reset()
         time_end = time.time()
-        time_hr = (time_end - time_start) / 3600
-        eval_image(net, args.eval_image, time_hr)
+        time_min = (time_end - time_start) / 60
+        eval_image(net, args.eval_image, time_min)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
