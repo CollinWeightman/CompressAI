@@ -302,11 +302,13 @@ def log_net_summery(
     time_min,
     out_net,
 ):
+    codebook_bit = int(data_ch_bpp * 8 * 8)    
     retval = eval_images(net, args.dataset + '/test/', version, data_ch_bpp)
     retval2 = eval_images(net, args.dataset + '/test2/', version, data_ch_bpp)            
-    (psnr, msssim, total_bpp) = [(retval[i]*18 + retval2[i]*6)/24 for i in range(len(retval))]    
-        
-    log_s = f",mse wt, {args.lmbda}\n"
+    (psnr, msssim, total_bpp) = [(retval[i]*18 + retval2[i]*6)/24 for i in range(len(retval))]
+    
+    log_s = f"version, {version}_{codebook_bit}\n"
+    log_s = log_s + f"mse wt, {args.lmbda}\n"
     
     usage = out_net['usage']
     y = out_net['y']
@@ -349,12 +351,12 @@ def log_net_summery(
         mse_list.append(mse.item())
         usage_list.append(usage.item())
 
-    log_s = log_s + f"\n usage"
+    log_s = log_s + f"usage"
     for i in range(args.quantizers):
         log_s = (log_s + f",{usage_list[i]}") 
     log_s = log_s + f"\n part_mse"
     for i in range(args.quantizers):
-        log_s = (log_s + f",{mse_list[i]}" )
+        log_s = (log_s + f",{mse_list[i]}" )        
+    log_s = log_s + '\n\n'
     with open('finish_record.csv','a') as f:        
         f.write(log_s)
-

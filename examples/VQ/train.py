@@ -149,7 +149,7 @@ def main(argv):
         pin_memory=(device == "cuda"),
     )
         
-    CB_size = [512, 256, 128, 64, 32, 16, 8, 4, 2, 1]    
+    CB_size = [512, 256, 128, 64, 32, 16, 8, 4, 2]    
     for i in range(args.iterations):
         log_s = f'loss, mse, bpp, aux, psnr\n'
         with open('log_training.csv', 'a') as f:
@@ -159,7 +159,7 @@ def main(argv):
         if args.codebook_size == 0:
             CB = CB_size
         else:
-            CB_index = 9 - math.log2(args.codebook_size)
+            CB_index = int(9 - math.log2(args.codebook_size))
             CB = CB_size[CB_index:]
             
         version = f'{args.model}_{args.quantizers}'
