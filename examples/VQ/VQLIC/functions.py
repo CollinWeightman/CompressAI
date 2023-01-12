@@ -54,7 +54,7 @@ class E2E_AVQ_loss(nn.Module):
         out["psnr"] = compute_psnr(output["x_hat"], target)        
         out["bpp_loss"] = torch.log(output["likelihoods"]).sum() / (-math.log(2) * num_pixels)  if ("likelihoods" in output) else torch.tensor(0)        
         out["y_mse"] = F.mse_loss(output["y_hat"], output["y"]) if ("y_hat" in output) else torch.tensor(0)
-        out["loss"] = self.lmbda * 255**2 *  out["mse_loss"] + out["bpp_loss"] + output["commit"]
+        out["loss"] = self.lmbda * 255**2 *  out["mse_loss"] + out["bpp_loss"] + output["commit"].sum()
         return out
     
 class AverageMeter:
@@ -265,7 +265,6 @@ def save_model(net, version, CBs):
         torch.save({}, f'{version}.tar')
     models = torch.load( f'{version}.tar')
     state = {
-        "AE" : net.AE.state_dict(),
         f"{CBs}": net.state_dict(),
     }
     models.update(state)

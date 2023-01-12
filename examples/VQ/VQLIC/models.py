@@ -77,6 +77,7 @@ def build_net(mode, N, dim):
             nn.LeakyReLU(inplace=True),
             conv3x3(N, quantizers * 2),
         )
+        
 
 class AutoEncoder(nn.Module):
     def __init__(self, N=128, dim=64):
@@ -89,6 +90,19 @@ class AutoEncoder(nn.Module):
         x_hat = self.g_s(y)
         return {
             'x_hat': x_hat,
+        }
+class Scaler_AE(nn.Module):
+    def __init__(self, N=128, dim=64):
+        super().__init__()
+        self.AE = AutoEncoder(N, dim)        
+    def forward(self, x):
+        y = self.AE.g_a(x)
+#         y_hat = torch.round(y)
+        x_hat = self.AE.g_s(y)
+        mse = F.mse_loss(x, x_hat)
+        return {
+            'x_hat': x_hat,
+            'loss': mse,
         }
 class FineTuningAE(nn.Module):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
@@ -157,6 +171,13 @@ class VQVAE(nn.Module):
                 accept_image_fmap = True,
                 threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2                
             )
+            
+    def load_AE(self, path):
+        AE_params = torch.load(path)
+        if 'AE' in AE_params:
+            AE_params = AE_params['AE']
+        self.AE.load_state_dict(AE_params)
+            
     def calc_cross_entropy(self, symbol):
         ones = torch.ones_like(symbol).to(device).float()
         cross_entropy_from_N_01 = self.gaussian_conditional._likelihood(symbol, ones)
@@ -167,7 +188,7 @@ class VQVAE(nn.Module):
         y = self.AE.g_a(x)
         ce = self.calc_cross_entropy(y)
         z_likelihoods = torch.tensor(1)
-        y_hat, y_id, commit, usage = self.AE.vq(y)  # (b, Q, w, h), (b, Q, w, h), (b), (b)
+        y_hat, y_id, commit, usage = self.vq(y)  # (b, Q, w, h), (b, Q, w, h), (b), (b)
         x_hat = self.AE.g_s(y_hat)
         return {
             "y":y,
@@ -179,8 +200,10 @@ class VQVAE(nn.Module):
             "cross": ce,
         }
 
-class VQVAE_mixed_dims(VQVAE):
-    def __init__(self, N=128, CB_size_list = [256, 256, 256, 256], dim_list = [8, 8, 16, 32], quantizers=4):
+class VQVAE_variable_dims(VQVAE):
+    def __init__(self, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256]):
+        if (not type(CB_size_list) == list) or (not type(dim_list) == list) or (not len(CB_size_list) == len(dim_list)):
+            print('init error')        
         super().__init__(N, sum(dim_list), quantizers, CB_size_list[0])
         self.dim = sum(dim_list)            
         self.dim_list = dim_list
@@ -193,7 +216,24 @@ class VQVAE_mixed_dims(VQVAE):
             decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
             commitment_weight = 0.25,   # the weight on the commitment loss
             accept_image_fmap = True,
+            threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2
         )
+
+# class classifier(nn.Module):
+#     def __init__(self, take_part, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256]):
+#         super().__init__()
+#         self.extractor = VQVAE_variable_dims(N, dim_list, quantizer, CB_size_list)
+#         self.classifier_in_dim = sum(dim_list[:(take_part + 1)])
+#         self.classifier = nn.Sequential(
+#             nn.Linear(64 * 32 * 32, 128),
+#             nn.Linear(128, 32),
+#             nn.Linear(32, 10),
+#         )
+#     def forward(self, x):
+#         fmaps = self.extractor.AE.g_a(x)
+#         print(fmaps.shape)
+#         fmaps_flat = fmaps.view()
+#         predict = 
 
 class Adapt_VQ(VQVAE):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
@@ -201,8 +241,9 @@ class Adapt_VQ(VQVAE):
         self.entropy_bottleneck = EntropyBottleneck(channels = N)
         self.lower_bound_s = LowerBound(0.11)
         self.h_a = build_net('ha', N, dim)
-        self.h_s = build_net('hs', N, dim)          
+        self.h_s = build_net('hs', N, dim)
         
+    # ADD function to load pre-trained model
     def standardized(self, y, means, scales):
         standard_deviations = self.lower_bound_s(scales) # SD shouldn't be less than 0
         y_std = y - means
@@ -331,6 +372,26 @@ def get_model(model_name="VQVAE"):
         return Adapt_VQ
     elif model_name == "FineTuningAE":
         return FineTuningAE
+    elif model_name == "variable_dims":
+        return VQVAE_variable_dims
+    elif model_name == "Scaler_AE":
+        return Scaler_AE
     else:
         print('search failed! return default: AE')
         return AutoEncoder
+    
+def get_variable_dc(inx):
+    inx_ = [[0, 1], [1, 0], [1, 1], [1, 2], [2, 1], [2, 2]]
+    dim_list, codebook_size_list = get_variable_lists(inx_[inx][0], inx_[inx][1])
+    return dim_list, codebook_size_list
+    
+def get_variable_lists(dim_id, cb_id):
+    ret_CB = []
+    ret_CB.append([64, 64, 64, 64])  # 24 bits
+    ret_CB.append([128, 128, 32, 32])# 24 bits    
+    ret_CB.append([256, 128, 32, 16])# 24 bits    
+    ret_dim = []
+    ret_dim.append([16, 16, 16, 16]) # 64 dims
+    ret_dim.append([8, 8, 24, 24]) # 64 dims
+    ret_dim.append([8, 8, 16, 32]) # 64 dims
+    return ret_dim[dim_id], ret_CB[cb_id]
