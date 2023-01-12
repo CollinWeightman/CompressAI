@@ -23,6 +23,7 @@ from PIL import Image
 
 from VQLIC.models import (
     get_model,
+    get_variable_dc,
 )
 from VQLIC.functions import (
     AverageMeter,
@@ -106,8 +107,10 @@ def parse_args(argv):
     parser.add_argument("--fix-AE", default=False, help="fix parameters of AutoEncoder",)    
     parser.add_argument("-i","--iterations", type=int, default=1, help="Exeute iterations (default: %(default)s)",)
     parser.add_argument("--vector-dim", type=int, default=64, help="setting vector quantization",)
-    parser.add_argument("--quantizers", type=int, default=1, help="setting vector quantization",)
-    parser.add_argument("--codebook-size", type=int, default=0, help="setting vector quantization codebook",)    
+    parser.add_argument("-cbs","--codebook-size", type=int, default=0, help="setting vector quantization codebook",)
+    parser.add_argument("-q","--quantizers", type=int, default=1, help="setting vector quantization",)
+    parser.add_argument("-p","--pretrained", type=str, default="", help="Load AE Parameters")
+    parser.add_argument("-vm","--variable-mode", type=int, default=5, help="variable",)
     # MOD end
 
     args = parser.parse_args(argv)
@@ -148,27 +151,35 @@ def main(argv):
         shuffle=False,
         pin_memory=(device == "cuda"),
     )
-        
+    
     CB_size = [512, 256, 128, 64, 32, 16, 8, 4, 2]    
+    
     for i in range(args.iterations):
         log_s = f'loss, mse, bpp, aux, psnr\n'
         with open('log_training.csv', 'a') as f:
             f.write(log_s)
         picked_model = get_model(args.model)
-        
-        if args.codebook_size == 0:
+        if args.codebook_size == 0 and (not args.model == "variable_dims"):
             CB = CB_size
-        else:
+        elif not args.model == "variable_dims":
             CB_index = int(9 - math.log2(args.codebook_size))
             CB = CB_size[CB_index:]
-            
+        else:
+            if i == 6:
+                break
+            dim_list, cbs_list = get_variable_dc(args.variable_mode) if (args.iterations == 1) else get_variable_dc(i)
+        
         version = f'{args.model}_{args.quantizers}'
         if (args.model == "AutoEncoder"):
             net = picked_model(N=128, dim=args.vector_dim)
+        elif (args.model == "variable_dims"):
+            net = picked_model(128, dim_list, 4, cbs_list)
         else:
-            net = picked_model(N=128, dim=args.vector_dim, quantizers = args.quantizers, CB_size=CB[i])        
+            net = picked_model(N=128, dim=args.vector_dim, quantizers = args.quantizers, CB_size=CB[i])
         net = net.to(device)
-
+        if not args.pretrained == "":
+            net.load_AE(args.pretrained)
+        
         optimizer_list = configure_optimizers(net) if (not args.fix_AE) else  configure_optimizers_seprate(net)
         lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer_list[0], "min", eps = 1e-9, cooldown = 10, verbose = True)
         criterion = E2E_AVQ_loss(lmbda=args.lmbda) if (not args.fix_AE) else FTAVQ_loss(lmbda=args.lmbda)
@@ -189,14 +200,16 @@ def main(argv):
                 break
         time_end = time.time()
         time_min = (time_end - time_start) / 60                
-        save_model(net, version, CB[i])
-
+        if (not args.model == "variable_dims"):
+            save_model(net, version, CB[i])
+        else:
+            save_model(net, version, f'mode={i}')
         # summery
         with torch.no_grad():
             for d in test_dataloader:
                 d = d.to(device)
                 out_net = net(d)
-        data_ch_bpp = math.log2(CB[i]) * args.quantizers / 8 / 8        
+        data_ch_bpp = math.log2(CB[i]) * args.quantizers / 8 / 8 if (not args.model == "variable_dims") else 24 / 8 / 8
         log_net_summery(
             args,
             epoch + 1,
