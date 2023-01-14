@@ -41,7 +41,7 @@ print(len(train_dataset) / BS)
 
 in_data_side_len = train_dataset[0][0].shape[1]
 classes = 1000
-epochs = 100
+epochs = 1
 print(f'data shape: ({in_data_side_len}, {in_data_side_len})')
 print(f'classes number: {classes}')
 
@@ -98,23 +98,32 @@ end = time.time()
 print(f'{(end - start) / 60} s')
 
 correct = 0
+top_5_correct = 0
 total = 0
 # since we're not training, we don't need to calculate the gradients for our outputs
 with torch.no_grad():
     for data in test_dataloader:
         images, labels = data
         if (not len(labels) == BS):
-            break        
+            break
         images = images.to(device)
         labels = labels.to(device)
         # calculate outputs by running images through the network
         outputs = net(images)
         # the class with the highest energy is what we choose as prediction
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
+        outputs_clone = outputs.clone()
+        # top 1
         correct += (predicted == labels).sum().item()
+        # top 5
+        for i in range(5):
+            _, predicted = torch.max(outputs_clone.data, 1)
+            top_5_correct += (predicted == labels).sum().item()
+            outputs_clone[range(BS), predicted] = -1
+        # total
+        total += labels.size(0)
         break
-
 print(f'Accuracy of the network on the 10000 test images: {100 * correct // total} %')
+print(f'Accuracy of the network on the 10000 test images: {100 * top_5_correct // total} %')
+
 print(predicted[:10])
 print(labels[:10])
