@@ -219,22 +219,58 @@ class VQVAE_variable_dims(VQVAE):
             threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2
         )
 
-# class classifier(nn.Module):
-#     def __init__(self, take_part, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256]):
-#         super().__init__()
-#         self.extractor = VQVAE_variable_dims(N, dim_list, quantizer, CB_size_list)
-#         self.classifier_in_dim = sum(dim_list[:(take_part + 1)])
-#         self.classifier = nn.Sequential(
-#             nn.Linear(64 * 32 * 32, 128),
-#             nn.Linear(128, 32),
-#             nn.Linear(32, 10),
-#         )
-#     def forward(self, x):
-#         fmaps = self.extractor.AE.g_a(x)
-#         print(fmaps.shape)
-#         fmaps_flat = fmaps.view()
-#         predict = 
+class classifier(nn.Module):
+    def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256]):
+        super().__init__()
+        self.in_net = VQVAE_variable_dims(N, dim_list, quantizers, CB_size_list)
+        self.in_dim = sum(dim_list[:take_part])
+        self.batch_size = batch_size
+        self.in_cls_side_len = input_side_len // 8
+        self.cls_cnn =  nn.Sequential(
+            conv3x3(self.in_dim, N)
+        )
+        self.cls_lin = nn.Sequential(
+            nn.Linear(N * self.in_cls_side_len * self.in_cls_side_len, 1024),
+            nn.Linear(1024, 1024),
+            nn.Linear(1024, classes),
+            nn.Softmax(dim = 1),
+        )
+    def forward(self, x):
+        fmaps = self.in_net.AE.g_a(x)
+        in_cnn = fmaps[:, :self.in_dim]
+        out_cnn = self.cls_cnn(in_cnn)
+        x_ = out_cnn.reshape(self.batch_size, -1)
+#         print(f'fmaps: {fmaps.shape}\nin_cnn: {in_cnn.shape}\nout_cnn:{out_cnn.shape}\nx_: {x_.shape}')        
+        predict = self.cls_lin(x_)
+        return predict
 
+# undone
+class classifier_AE(nn.Module):
+    def __init__(self, batch_size=16, N=128, dim=64, quantizers=4, CB=64):
+        super().__init__()
+        self.in_net = VQVAE(N, dim, quantizers, CB)
+        self.in_dim = dim
+        self.batch_size = batch_size
+        
+        self.cls_cnn =  nn.Sequential(
+            ResidualBlockWithStride(self.in_dim, N), # 16
+            ResidualBlockWithStride(N   , N*2),      #  8
+            ResidualBlockWithStride(N*2 , N*4),      #  4
+        )
+        self.cls_lin = nn.Sequential(
+            nn.Linear(N * 4 * 4 * 4, 4096),
+            nn.Linear(4096, 2048),
+            nn.Linear(2048, 1000),
+            nn.Softmax(dim = 0),            
+        )
+    def forward(self, x):
+        fmaps = self.in_net.AE.g_a(x)
+        in_cnn = fmaps[:, :self.in_dim]
+        out_cnn = self.cls_cnn(in_cnn)
+        x_ = out_cnn.reshape(self.batch_size, -1)
+        predict = self.cls_lin(x_)
+        return predict    
+    
 class Adapt_VQ(VQVAE):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
         super().__init__(N, dim, quantizers, CB_size)
@@ -376,22 +412,24 @@ def get_model(model_name="VQVAE"):
         return VQVAE_variable_dims
     elif model_name == "Scaler_AE":
         return Scaler_AE
+    elif model_name == "classifier":
+        return classifier
     else:
         print('search failed! return default: AE')
         return AutoEncoder
     
 def get_variable_dc(inx):
-    inx_ = [[0, 1], [1, 0], [1, 1], [1, 2], [2, 1], [2, 2]]
+    inx_ = [[0, 1], [1, 0], [1, 1], [1, 2], [2, 1], [2, 2], [0, 0]]
     dim_list, codebook_size_list = get_variable_lists(inx_[inx][0], inx_[inx][1])
     return dim_list, codebook_size_list
     
 def get_variable_lists(dim_id, cb_id):
-    ret_CB = []
-    ret_CB.append([64, 64, 64, 64])  # 24 bits
-    ret_CB.append([128, 128, 32, 32])# 24 bits    
-    ret_CB.append([256, 128, 32, 16])# 24 bits    
     ret_dim = []
     ret_dim.append([16, 16, 16, 16]) # 64 dims
     ret_dim.append([8, 8, 24, 24]) # 64 dims
     ret_dim.append([8, 8, 16, 32]) # 64 dims
+    ret_CB = []
+    ret_CB.append([64, 64, 64, 64])  # 24 bits
+    ret_CB.append([128, 128, 32, 32])# 24 bits    
+    ret_CB.append([256, 128, 32, 16])# 24 bits    
     return ret_dim[dim_id], ret_CB[cb_id]

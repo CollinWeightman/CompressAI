@@ -165,11 +165,11 @@ def main(argv):
             CB_index = int(9 - math.log2(args.codebook_size))
             CB = CB_size[CB_index:]
         else:
-            if i == 6:
-                break
-            dim_list, cbs_list = get_variable_dc(args.variable_mode) if (args.iterations == 1) else get_variable_dc(i)
-        
-        version = f'{args.model}_{args.quantizers}'
+            if i == 7:
+                break                
+            vmode = args.variable_mode if (args.iterations == 1) else i
+            dim_list, cbs_list = get_variable_dc(vmode)
+        version = f'{args.model}_{args.quantizers}' if (not args.model == "variable_dims") else f'{args.model}_{vmode}'
         if (args.model == "AutoEncoder"):
             net = picked_model(N=128, dim=args.vector_dim)
         elif (args.model == "variable_dims"):
@@ -203,7 +203,7 @@ def main(argv):
         if (not args.model == "variable_dims"):
             save_model(net, version, CB[i])
         else:
-            save_model(net, version, f'mode={i}')
+            save_model(net, version, f'mode={vmode}')
         # summery
         with torch.no_grad():
             for d in test_dataloader:
