@@ -4,8 +4,8 @@ import torchvision.datasets as datasets
 from torch.utils.data import DataLoader
 from torchvision import transforms
 device = "cuda" if torch.cuda.is_available() else "cpu"
-BS = 8
-
+BS = 4
+epochs = 10
 tsf = transforms.Compose([
     transforms.RandomHorizontalFlip(p=0.5),
     transforms.ColorJitter(brightness=0.5),
@@ -27,6 +27,10 @@ train_dataloader = DataLoader(
     shuffle=True,
     pin_memory=(device == "cuda"),
 )
+
+classes = len(train_dataset.classes)
+in_data_side_len = train_dataset[0][0].shape[1]
+
 # test_dataset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=tsf_test)
 test_dataset = datasets.ImageFolder(root='../../../imagenet-mini/val', transform=tsf_test)
 test_dataloader = DataLoader(
@@ -36,12 +40,6 @@ test_dataloader = DataLoader(
     shuffle=True,
     pin_memory=(device == "cuda"),
 )
-print(len(train_dataset))
-print(len(train_dataset) / BS)
-
-in_data_side_len = train_dataset[0][0].shape[1]
-classes = 1000
-epochs = 1
 print(f'data shape: ({in_data_side_len}, {in_data_side_len})')
 print(f'classes number: {classes}')
 
@@ -55,13 +53,16 @@ from VQLIC.models import (
     get_model,
     get_variable_dc,
 )
+# MOD the switch in experiment 2
+switch = 0
+cb = [128, 128, 32, 32]
+dim = [[16, 16, 16, 16], [8, 8, 24, 24]]
+mode = [0, 2]
 model = get_model('classifier')
-dim = [8, 8, 16, 32]
-cb = [256, 128, 32, 16]
-net = model(1, classes, in_data_side_len, BS, 128, dim, 4, cb).to(device)
+net = model(2, classes, in_data_side_len, BS, 128, dim[switch], 4, cb).to(device)
 ckpt = torch.load('variable_dims.tar')
 print(ckpt.keys())
-net.in_net.load_state_dict(ckpt['mode=5'])
+net.in_net.load_state_dict(ckpt[f'mode={mode[switch]}'])
 parameters = {
     n
     for n, p in net.named_parameters()
@@ -83,10 +84,14 @@ for epoch in range(epochs):
         img = img.to(device)
         label = label.to(device)
         predict = net(img)
+        print(predict.shape)
         loss = criterion(predict, label)
         loss.backward()
         optimizer.step()
         stamp.update(loss)
+        print(predict.max())
+        print(predict.min())
+        break
     lrs.step(stamp.avg)
     strr = f'{stamp.avg}'
     print(f'{epoch}: {strr}')
@@ -95,7 +100,7 @@ for epoch in range(epochs):
     if epoch % 10 == 0:
         torch.save(net.state_dict(), 'cls.tar')
 end = time.time()
-print(f'{(end - start) / 60} s')
+print(f'{(end - start) / 60} min')
 
 correct = 0
 top_5_correct = 0
@@ -111,19 +116,20 @@ with torch.no_grad():
         # calculate outputs by running images through the network
         outputs = net(images)
         # the class with the highest energy is what we choose as prediction
-        outputs_clone = outputs.clone()
         # top 1
+        _, predicted = torch.max(outputs.data, 1)
         correct += (predicted == labels).sum().item()
         # top 5
+        outputs_clone = outputs.clone()        
         for i in range(5):
-            _, predicted = torch.max(outputs_clone.data, 1)
-            top_5_correct += (predicted == labels).sum().item()
+            _, predicted_ = torch.max(outputs_clone.data, 1)
+            top_5_correct += (predicted_ == labels).sum().item()
             outputs_clone[range(BS), predicted] = -1
         # total
         total += labels.size(0)
         break
-print(f'Accuracy of the network on the 10000 test images: {100 * correct // total} %')
-print(f'Accuracy of the network on the 10000 test images: {100 * top_5_correct // total} %')
-
+print(f'Top-1 Accuracy: {100 * correct // total} %')
+print(f'Top-5 Accuracy: {100 * top_5_correct // total} %')
+print(outputs[0][:10])
 print(predicted[:10])
 print(labels[:10])

@@ -15,6 +15,7 @@ from compressai.layers import (
 device = "cuda" if torch.cuda.is_available() else "cpu"
 from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
 from vector_quantize_pytorch.residual_vq import ResidualVQ, MultiLayerVQ, HierarchicalVQ
+from torchvision.models import resnet50, ResNet50_Weights, resnet152, ResNet152_Weights
 
 def build_net(mode, N, dim):
     if mode == 'ga':
@@ -77,6 +78,66 @@ def build_net(mode, N, dim):
             nn.LeakyReLU(inplace=True),
             conv3x3(N, quantizers * 2),
         )
+    elif mode == 'ha_5':
+        return nn.Sequential(
+            conv3x3(dim, N),
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N),
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N, stride=2),
+            
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N),
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N, stride=2),
+            
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N),
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N, stride=2),
+
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N),
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N, stride=2),
+
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N),
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N, stride=2),
+            
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N),
+        )
+    elif mode == 'hs_5':
+        return nn.Sequential(
+            conv3x3(N, N),
+            nn.LeakyReLU(inplace=True),
+            subpel_conv3x3(N, N, 2),
+            
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N),
+            nn.LeakyReLU(inplace=True),
+            subpel_conv3x3(N, N, 2),
+
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N),
+            nn.LeakyReLU(inplace=True),
+            subpel_conv3x3(N, N, 2),
+
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N),
+            nn.LeakyReLU(inplace=True),
+            subpel_conv3x3(N, N, 2),
+            
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, N),
+            nn.LeakyReLU(inplace=True),
+            subpel_conv3x3(N, N, 2),
+                        
+            nn.LeakyReLU(inplace=True),
+            conv3x3(N, dim * 2),            
+        )        
         
 
 class AutoEncoder(nn.Module):
@@ -104,6 +165,7 @@ class Scaler_AE(nn.Module):
             'x_hat': x_hat,
             'loss': mse,
         }
+
 class FineTuningAE(nn.Module):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
         super().__init__()
@@ -144,6 +206,7 @@ class FineTuningAE(nn.Module):
             "usage": usage,
         }
 
+# done
 class VQVAE(nn.Module):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
         super().__init__()
@@ -159,7 +222,9 @@ class VQVAE(nn.Module):
                 decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
                 commitment_weight = 0.25,   # the weight on the commitment loss
                 accept_image_fmap = True,
-                threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2                
+                threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2
+                kmeans_init = True,   # set to True
+                kmeans_iters = 10,     # number of kmeans iterations to calculate the centroids for the codebook on init                
             )
         elif quantizers > 1:
             self.vq = MultiLayerVQ(
@@ -169,7 +234,9 @@ class VQVAE(nn.Module):
                 decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
                 commitment_weight = 0.25,   # the weight on the commitment loss
                 accept_image_fmap = True,
-                threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2                
+                threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2                
+                kmeans_init = True,   # set to True
+                kmeans_iters = 10,    # number of kmeans iterations to calculate the centroids for the codebook on init
             )
             
     def load_AE(self, path):
@@ -200,6 +267,7 @@ class VQVAE(nn.Module):
             "cross": ce,
         }
 
+# done
 class VQVAE_variable_dims(VQVAE):
     def __init__(self, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256]):
         if (not type(CB_size_list) == list) or (not type(dim_list) == list) or (not len(CB_size_list) == len(dim_list)):
@@ -225,25 +293,16 @@ class classifier(nn.Module):
         self.in_net = VQVAE_variable_dims(N, dim_list, quantizers, CB_size_list)
         self.in_dim = sum(dim_list[:take_part])
         self.batch_size = batch_size
+        self.classes = classes        
         self.in_cls_side_len = input_side_len // 8
-        self.cls_cnn =  nn.Sequential(
-            conv3x3(self.in_dim, N)
-        )
-        self.cls_lin = nn.Sequential(
-            nn.Linear(N * self.in_cls_side_len * self.in_cls_side_len, 1024),
-            nn.Linear(1024, 1024),
-            nn.Linear(1024, classes),
-            nn.Softmax(dim = 1),
-        )
+        self.cls_cnn = conv3x3(self.in_dim, 3)
+        self.cls_resnet = resnet152(weights=ResNet152_Weights.DEFAULT, progress=False).to(device)
     def forward(self, x):
         fmaps = self.in_net.AE.g_a(x)
-        in_cnn = fmaps[:, :self.in_dim]
+        in_cnn = fmaps[:,:self.in_dim]
         out_cnn = self.cls_cnn(in_cnn)
-        x_ = out_cnn.reshape(self.batch_size, -1)
-#         print(f'fmaps: {fmaps.shape}\nin_cnn: {in_cnn.shape}\nout_cnn:{out_cnn.shape}\nx_: {x_.shape}')        
-        predict = self.cls_lin(x_)
+        predict = self.cls_resnet(out_cnn)
         return predict
-
 # undone
 class classifier_AE(nn.Module):
     def __init__(self, batch_size=16, N=128, dim=64, quantizers=4, CB=64):

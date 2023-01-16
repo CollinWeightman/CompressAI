@@ -42,19 +42,21 @@ class FTAVQ_loss(nn.Module):
         return out
 
 class E2E_AVQ_loss(nn.Module):
-    def __init__(self, lmbda=1e-2):
+    def __init__(self, lmbda=1e-2, enable_bpploss = True):
         super().__init__()
         self.mse = nn.MSELoss()
         self.lmbda = lmbda
+        self.enable_bpploss = enable_bpploss
     def forward(self, output, target):
         N, _, H, W = target.size()
         out = {}
         num_pixels = N * H * W
         out["mse_loss"] = self.mse(output["x_hat"], target)
         out["psnr"] = compute_psnr(output["x_hat"], target)        
-        out["bpp_loss"] = torch.log(output["likelihoods"]).sum() / (-math.log(2) * num_pixels)  if ("likelihoods" in output) else torch.tensor(0)        
+        out["bpp_loss"] = torch.log(output["likelihoods"]).sum() / (-math.log(2) * num_pixels)  if ("likelihoods" in output) else torch.tensor(0)
+        bpp_temp =  out["bpp_loss"] if self.enable_bpploss else 0
         out["y_mse"] = F.mse_loss(output["y_hat"], output["y"]) if ("y_hat" in output) else torch.tensor(0)
-        out["loss"] = self.lmbda * 255**2 *  out["mse_loss"] + out["bpp_loss"] + output["commit"].sum()
+        out["loss"] = self.lmbda * 255**2 *  out["mse_loss"] + bpp_temp + output["commit"].sum()
         return out
     
 class AverageMeter:
@@ -163,22 +165,31 @@ def configure_optimizers_separate(net):
     union_params = parameters | aux_parameters
 
     assert len(inter_params) == 0
-    assert len(union_params) - len(params_dict.keys()) == 0
+#     assert len(union_params) - len(params_dict.keys()) == 0
 
-    optimizer = optim.Adam((params_dict[n] for n in sorted(parameters)), lr=1e-4,)
     out = []
+    if len(parameters) == 0:
+        return out
+    optimizer = optim.Adam((params_dict[n] for n in sorted(parameters)), lr=1e-4,)
     out.append(optimizer)
+
     if len(aux_parameters) == 0:
         return out
-    
     aux_optimizer = optim.Adam((params_dict[n] for n in sorted(aux_parameters)), lr=1e-3,)
     out.append(aux_optimizer)
     return out
+
 def train_one_epoch(
     epoch, model,train_dataloader, optimizer_list, criterion, clip_max_norm
 ):
     model.train()
     device = next(model.parameters()).device
+
+    if len(optimizer_list) == 0:
+        for i, d in enumerate(train_dataloader):
+            d = d.to(device)
+            out_net = model(d)
+        return
 
     for i, d in enumerate(train_dataloader):
         d = d.to(device)

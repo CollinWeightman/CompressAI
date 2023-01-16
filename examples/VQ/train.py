@@ -104,13 +104,14 @@ def parse_args(argv):
     parser.add_argument("-e", "--epochs", default=2000, type=int, help="Number of epochs (default: %(default)s)",)    
     parser.add_argument("-m", "--model", default="AutoEncoder", help="Model architecture (default: %(default)s)",)
     parser.add_argument("-d", "--dataset", type=str, default="../DIV2K_HR", help="Training dataset",)    
-    parser.add_argument("--fix-AE", default=False, help="fix parameters of AutoEncoder",)    
+    parser.add_argument("--fix-AE", action="store_true", help="fix parameters of AutoEncoder",)    
     parser.add_argument("-i","--iterations", type=int, default=1, help="Exeute iterations (default: %(default)s)",)
     parser.add_argument("--vector-dim", type=int, default=64, help="setting vector quantization",)
     parser.add_argument("-cbs","--codebook-size", type=int, default=0, help="setting vector quantization codebook",)
     parser.add_argument("-q","--quantizers", type=int, default=1, help="setting vector quantization",)
     parser.add_argument("-p","--pretrained", type=str, default="", help="Load AE Parameters")
     parser.add_argument("-vm","--variable-mode", type=int, default=5, help="variable",)
+    parser.add_argument("-dbl","--disable-bpp-loss", action="store_true", help="don't backword gradient from bpp loss",)    
     # MOD end
 
     args = parser.parse_args(argv)
@@ -118,7 +119,8 @@ def parse_args(argv):
         
 def main(argv):
     args = parse_args(argv)
-
+    train_vq_only = True if (args.model == "VQVAE" and args.fix_AE) else False
+    
     if args.seed is not None:
         torch.manual_seed(args.seed)
         random.seed(args.seed)
@@ -169,7 +171,14 @@ def main(argv):
                 break                
             vmode = args.variable_mode if (args.iterations == 1) else i
             dim_list, cbs_list = get_variable_dc(vmode)
-        version = f'{args.model}_{args.quantizers}' if (not args.model == "variable_dims") else f'{args.model}_{vmode}'
+            
+        if args.model == "variable_dims":
+            version = f'{args.model}_{vmode}'
+        elif train_vq_only:
+            version = f'vq_{args.quantizers}'
+        else:
+            version = f'{args.model}_{args.quantizers}'
+
         if (args.model == "AutoEncoder"):
             net = picked_model(N=128, dim=args.vector_dim)
         elif (args.model == "variable_dims"):
@@ -177,12 +186,16 @@ def main(argv):
         else:
             net = picked_model(N=128, dim=args.vector_dim, quantizers = args.quantizers, CB_size=CB[i])
         net = net.to(device)
+
         if not args.pretrained == "":
             net.load_AE(args.pretrained)
         
-        optimizer_list = configure_optimizers(net) if (not args.fix_AE) else  configure_optimizers_seprate(net)
-        lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer_list[0], "min", eps = 1e-9, cooldown = 10, verbose = True)
-        criterion = E2E_AVQ_loss(lmbda=args.lmbda) if (not args.fix_AE) else FTAVQ_loss(lmbda=args.lmbda)
+        optimizer_list = configure_optimizers(net) if (not args.fix_AE) else configure_optimizers_separate(net)
+        if not train_vq_only:
+            lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer_list[0], "min", eps = 1e-9, cooldown = 10, verbose = True)
+        
+        print(args.disable_bpp_loss)            
+        criterion = E2E_AVQ_loss(args.lmbda, (not args.disable_bpp_loss)) if (not args.fix_AE) else FTAVQ_loss(args.lmbda)        
         last_epoch = 0
         best_loss = float("inf")
         
@@ -190,20 +203,23 @@ def main(argv):
         for epoch in range(last_epoch, args.epochs):
             # train
             train_one_epoch(epoch, net, train_dataloader, optimizer_list, criterion, args.clip_max_norm)
-            loss = test_epoch(epoch, test_dataloader, net, criterion)            
-            lr_scheduler.step(loss)
+            loss = test_epoch(epoch, test_dataloader, net, criterion)
+            if not train_vq_only:
+                lr_scheduler.step(loss)
             # To prevent initial training oscillation from causing the best loss value to be too low
-            if epoch == 10:
+            if epoch == 10 and not train_vq_only:
                 lr_scheduler._reset()
             # End condition
-            if optimizer_list[0].param_groups[0]['lr'] < 1e-8:
+            if not train_vq_only and optimizer_list[0].param_groups[0]['lr'] < 1e-8:
+                break
+            elif train_vq_only and epoch > 100:
                 break
         time_end = time.time()
         time_min = (time_end - time_start) / 60                
-        if (not args.model == "variable_dims"):
-            save_model(net, version, CB[i])
-        else:
+        if args.model == "variable_dims":
             save_model(net, version, f'mode={vmode}')
+        else:
+            save_model(net, version, CB[i])
         # summery
         with torch.no_grad():
             for d in test_dataloader:
