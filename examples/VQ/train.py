@@ -194,7 +194,6 @@ def main(argv):
         if not train_vq_only:
             lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer_list[0], "min", eps = 1e-9, cooldown = 10, verbose = True)
         
-        print(args.disable_bpp_loss)            
         criterion = E2E_AVQ_loss(args.lmbda, (not args.disable_bpp_loss)) if (not args.fix_AE) else FTAVQ_loss(args.lmbda)        
         last_epoch = 0
         best_loss = float("inf")

@@ -134,12 +134,9 @@ def build_net(mode, N, dim):
             conv3x3(N, N),
             nn.LeakyReLU(inplace=True),
             subpel_conv3x3(N, N, 2),
-                        
             nn.LeakyReLU(inplace=True),
             conv3x3(N, dim * 2),            
-        )        
-        
-
+        )
 class AutoEncoder(nn.Module):
     def __init__(self, N=128, dim=64):
         super().__init__()
@@ -386,6 +383,12 @@ class Adapt_VQ(VQVAE):
             "scales_hat":scales_hat,
             "means_hat":means_hat,
         }
+class Adapt_VQ_5(Adapt_VQ):
+    def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
+        super().__init__(N, dim, quantizers, CB_size)
+        self.h_a = build_net('ha_5', N, dim)
+        self.h_s = build_net('hs_5', N, dim)        
+        print('Adapt_VQ_5')
     
 class Adapt_VQ_mixed_dims(Adapt_VQ):
     def __init__(self, N=128, quantizers=4, CB_size_list = [256, 256, 256, 256], dim_list = [8, 8, 16, 32]):        
@@ -473,6 +476,8 @@ def get_model(model_name="VQVAE"):
         return Scaler_AE
     elif model_name == "classifier":
         return classifier
+    elif model_name =="Adapt_VQ_5":
+        return Adapt_VQ_5
     else:
         print('search failed! return default: AE')
         return AutoEncoder
