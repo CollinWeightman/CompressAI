@@ -42,43 +42,31 @@ class ResidualVQ(nn.Module):
         all_losses, all_indices = map(partial(torch.stack, dim = -1), (all_losses, all_indices))
         return quantized_out, all_indices, all_losses
 
-class ModResidualVQ(nn.Module):
+class VariableRVQ(nn.Module):
     def __init__(
         self,
         *,
-        num_quantizers,
-        shared_codebook = False,
+        dim,
+        CB_size_list,
         **kwargs
     ):
         super().__init__()
-        self.layers = nn.ModuleList([VectorQuantize(**kwargs) for _ in range(num_quantizers)])
-
-        if not shared_codebook:
-            return
-
-        first_vq, *rest_vq = self.layers
-        codebook = first_vq._codebook
-
-        for vq in rest_vq:
-            vq._codebook = codebook
-
+        self.num_quantizers = len(CB_size_list)
+        self.layers = nn.ModuleList([VectorQuantize(dim, CB_size_list[i], **kwargs) for i in range(self.num_quantizers)])
+        self.dim = dim
+        self.CB_size_list = CB_size_list        
     def forward(self, x):
-        quantized_out = 0.
+        quantized_out = torch.zeros_like(x)
         residual = x
-
-        all_losses = []
-        all_indices = []
-
-        for layer in self.layers:
-            quantized, indices, loss = layer(residual)
+        for i, layer in enumerate(self.layers):
+            quantized, indices, loss, usage = layer(residual)
             residual = residual - quantized
             quantized_out = quantized_out + quantized
-
-            all_indices.append(indices)
-            all_losses.append(loss)
-
-        all_losses, all_indices = map(partial(torch.stack, dim = -1), (all_losses, all_indices))
-        return quantized_out, all_indices, all_losses
+            indices_cat = indices.unsqueeze(1) if i == 0 else torch.cat([indices_cat, indices.unsqueeze(1)], 1)
+            loss_cat = loss if i == 0 else torch.cat([loss_cat, loss], 0)
+            usage = usage.unsqueeze(0)
+            perplexity_cat = usage if i == 0 else torch.cat([perplexity_cat, usage], 0)            
+        return quantized_out, indices_cat, loss_cat, perplexity_cat # (b, Q, w, h), (b, Q, w, h), (b), (b)
 
 class MultiLayerVQ(nn.Module):
     def __init__(
@@ -123,7 +111,7 @@ class HierarchicalVQ(nn.Module):
     ):
         super().__init__()
         self.layers = nn.ModuleList([VectorQuantize(dim_list[i], CB_size_list[i], **kwargs) for i in range(num_quantizers)])
-        self.num_quantizers = num_quantizers
+        self.num_quantizers =  num_quantizers
         self.dim_list = dim_list
         self.CB_size_list = CB_size_list
 

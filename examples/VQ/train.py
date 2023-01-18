@@ -24,6 +24,7 @@ from PIL import Image
 from VQLIC.models import (
     get_model,
     get_variable_dc,
+    get_variable_lists_RVQ,
 )
 from VQLIC.functions import (
     AverageMeter,
@@ -111,7 +112,8 @@ def parse_args(argv):
     parser.add_argument("-q","--quantizers", type=int, default=1, help="setting vector quantization",)
     parser.add_argument("-p","--pretrained", type=str, default="", help="Load AE Parameters")
     parser.add_argument("-vm","--variable-mode", type=int, default=5, help="variable",)
-    parser.add_argument("-dbl","--disable-bpp-loss", action="store_true", help="don't backword gradient from bpp loss",)    
+    parser.add_argument("-dbl","--disable-bpp-loss", action="store_true", help="don't backword gradient from bpp loss",)
+    parser.add_argument("-rvq","--RVQ-start-bits", type=int, default=20, help="setting RVQ start bits",)    
     # MOD end
 
     args = parser.parse_args(argv)
@@ -153,16 +155,19 @@ def main(argv):
         shuffle=False,
         pin_memory=(device == "cuda"),
     )
+#     variable_RVQ -i 3 -e 1
     
     CB_size = [512, 256, 128, 64, 32, 16, 8, 4, 2]    
-    
     for i in range(args.iterations):
         log_s = f'loss, mse, bpp, aux, psnr\n'
         with open('log_training.csv', 'a') as f:
             f.write(log_s)
         picked_model = get_model(args.model)
-        if args.codebook_size == 0 and (not args.model == "variable_dims"):
+        if args.codebook_size == 0 and (not (args.model == "variable_dims" or args.model == "variable_RVQ")):
             CB = CB_size
+        elif args.model == "variable_RVQ":
+            cbs_list = get_variable_lists_RVQ(args.RVQ_start_bits - i)
+            print('in')
         elif not args.model == "variable_dims":
             CB_index = int(9 - math.log2(args.codebook_size))
             CB = CB_size[CB_index:]
@@ -183,6 +188,11 @@ def main(argv):
             net = picked_model(N=128, dim=args.vector_dim)
         elif (args.model == "variable_dims"):
             net = picked_model(128, dim_list, 4, cbs_list)
+        elif (args.model == "variable_RVQ"):
+            net = picked_model(128, args.vector_dim, len(cbs_list), cbs_list)
+            
+            
+            
         else:
             net = picked_model(N=128, dim=args.vector_dim, quantizers = args.quantizers, CB_size=CB[i])
         net = net.to(device)
@@ -217,6 +227,8 @@ def main(argv):
         time_min = (time_end - time_start) / 60                
         if args.model == "variable_dims":
             save_model(net, version, f'mode={vmode}')
+        elif args.model == "variable_RVQ":
+            save_model(net, version, f'{args.RVQ_start_bits - i}')            
         else:
             save_model(net, version, CB[i])
         # summery
@@ -224,7 +236,13 @@ def main(argv):
             for d in test_dataloader:
                 d = d.to(device)
                 out_net = net(d)
-        data_ch_bpp = math.log2(CB[i]) * args.quantizers / 8 / 8 if (not args.model == "variable_dims") else 24 / 8 / 8
+                
+        if (args.model == "variable_dims"):
+            data_ch_bpp = 24 / 8 / 8
+        elif (args.model == "variable_RVQ"):
+            data_ch_bpp = (args.RVQ_start_bits - i) / 8 / 8
+        else:
+            data_ch_bpp = math.log2(CB[i]) * args.quantizers / 8 / 8
         log_net_summery(
             args,
             epoch + 1,

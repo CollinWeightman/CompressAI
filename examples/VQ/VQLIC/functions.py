@@ -262,7 +262,7 @@ def eval_images(net, dir_path, version, data_ch_bpp):
     msssim = AverageMeter()
     bitrate = AverageMeter()
     
-    files = [dir_path + f for f in os.listdir(dir_path)]
+    files = [dir_path + f for f in os.listdir(dir_path) if f.endswith('.png')]
     for i in range(len(files)):
         retval = eval_image(net, files[i], version, data_ch_bpp)
         psnr.update(retval[0])
@@ -312,6 +312,9 @@ def log_net_summery(
     time_min,
     out_net,
 ):
+    
+    with open('finish_record.csv','a') as f:        
+        f.write('index, value, value, value, value\n')    
     codebook_bit = int(data_ch_bpp * 8 * 8)    
     retval = eval_images(net, args.dataset + '/test/', version, data_ch_bpp)
     retval2 = eval_images(net, args.dataset + '/test2/', version, data_ch_bpp)            
@@ -341,7 +344,6 @@ def log_net_summery(
     log_s = log_s + f"epochs, {now_epochs}\n"
     log_s = log_s + f"sec per ep., {time_min / now_epochs}\n"
 
-    
     usage_list = []
     mse_list = []
     dim_list = []

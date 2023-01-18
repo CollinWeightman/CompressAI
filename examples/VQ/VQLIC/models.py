@@ -12,9 +12,11 @@ from compressai.layers import (
     conv3x3,
     subpel_conv3x3,
 )
+import math
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
-from vector_quantize_pytorch.residual_vq import ResidualVQ, MultiLayerVQ, HierarchicalVQ
+from vector_quantize_pytorch.residual_vq import ResidualVQ, MultiLayerVQ, HierarchicalVQ, VariableRVQ
 from torchvision.models import resnet50, ResNet50_Weights, resnet152, ResNet152_Weights
 
 def build_net(mode, N, dim):
@@ -283,7 +285,23 @@ class VQVAE_variable_dims(VQVAE):
             accept_image_fmap = True,
             threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2
         )
+        
 
+class variable_RVQ(VQVAE):
+    def __init__(self, N=128, dim=64, quantizers=2,CB_size_list = [1024, 32]):
+        super().__init__(N, dim, quantizers, CB_size_list[0])
+        self.dim = dim
+        self.CB_size_list = CB_size_list
+        self.vq = VariableRVQ(
+            dim = dim,
+            CB_size_list = CB_size_list,    # codebook size
+            decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
+            commitment_weight = 0.25,   # the weight on the commitment loss
+            accept_image_fmap = True,
+            threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2
+        )
+        
+# done
 class classifier(nn.Module):
     def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256]):
         super().__init__()
@@ -300,32 +318,6 @@ class classifier(nn.Module):
         out_cnn = self.cls_cnn(in_cnn)
         predict = self.cls_resnet(out_cnn)
         return predict
-# undone
-class classifier_AE(nn.Module):
-    def __init__(self, batch_size=16, N=128, dim=64, quantizers=4, CB=64):
-        super().__init__()
-        self.in_net = VQVAE(N, dim, quantizers, CB)
-        self.in_dim = dim
-        self.batch_size = batch_size
-        
-        self.cls_cnn =  nn.Sequential(
-            ResidualBlockWithStride(self.in_dim, N), # 16
-            ResidualBlockWithStride(N   , N*2),      #  8
-            ResidualBlockWithStride(N*2 , N*4),      #  4
-        )
-        self.cls_lin = nn.Sequential(
-            nn.Linear(N * 4 * 4 * 4, 4096),
-            nn.Linear(4096, 2048),
-            nn.Linear(2048, 1000),
-            nn.Softmax(dim = 0),            
-        )
-    def forward(self, x):
-        fmaps = self.in_net.AE.g_a(x)
-        in_cnn = fmaps[:, :self.in_dim]
-        out_cnn = self.cls_cnn(in_cnn)
-        x_ = out_cnn.reshape(self.batch_size, -1)
-        predict = self.cls_lin(x_)
-        return predict    
     
 class Adapt_VQ(VQVAE):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
@@ -389,7 +381,8 @@ class Adapt_VQ_5(Adapt_VQ):
         self.h_a = build_net('ha_5', N, dim)
         self.h_s = build_net('hs_5', N, dim)        
         print('Adapt_VQ_5')
-    
+
+# Discard
 class Adapt_VQ_mixed_dims(Adapt_VQ):
     def __init__(self, N=128, quantizers=4, CB_size_list = [256, 256, 256, 256], dim_list = [8, 8, 16, 32]):        
         super().__init__(N, sum(dim_list), quantizers, CB_size_list[0])
@@ -404,6 +397,8 @@ class Adapt_VQ_mixed_dims(Adapt_VQ):
             commitment_weight = 0.25,   # the weight on the commitment loss
             accept_image_fmap = True,
         )
+
+# Discard
 class Adapt_VQ_vectorwise(Adapt_VQ):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
         super().__init__(N, dim, quantizers, CB_size)
@@ -425,6 +420,7 @@ class Adapt_VQ_vectorwise(Adapt_VQ):
             y_ = y_hat if i == 0 else torch.cat([y_, y_hat], 1)            
         return y_
 
+# Discard    
 class Adapt_VQ_direct(Adapt_VQ):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
         super().__init__(N, dim, quantizers, CB_size)
@@ -478,6 +474,8 @@ def get_model(model_name="VQVAE"):
         return classifier
     elif model_name =="Adapt_VQ_5":
         return Adapt_VQ_5
+    elif model_name == "variable_RVQ":
+        return variable_RVQ
     else:
         print('search failed! return default: AE')
         return AutoEncoder
@@ -497,3 +495,21 @@ def get_variable_lists(dim_id, cb_id):
     ret_CB.append([128, 128, 32, 32])# 24 bits    
     ret_CB.append([256, 128, 32, 16])# 24 bits    
     return ret_dim[dim_id], ret_CB[cb_id]
+
+def get_variable_lists_RVQ(num):
+    retlist = []
+    if num >= 10:
+        num = num - 10
+        retlist.append(int(math.pow(2, 10)))
+    count = 0    
+    while num >= 5:
+        count = count + 1
+        num = num - 5
+        
+    if count > 0:
+        count = count - 1
+        retlist.append(int(math.pow(2, num + 5)))
+        
+    for i in range(count):
+        retlist.append(int(math.pow(2, 5)))
+    return retlist
