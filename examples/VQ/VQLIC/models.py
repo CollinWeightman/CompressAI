@@ -283,7 +283,7 @@ class VQVAE_variable_dims(VQVAE):
             decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
             commitment_weight = 0.25,   # the weight on the commitment loss
             accept_image_fmap = True,
-            threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2
+            threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2
         )
         
 
@@ -298,9 +298,28 @@ class variable_RVQ(VQVAE):
             decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
             commitment_weight = 0.25,   # the weight on the commitment loss
             accept_image_fmap = True,
-            threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2
+            threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2
+            kmeans_init = True,   # set to True
+            kmeans_iters = 10,    # number of kmeans iterations to calculate the centroids for the codebook on init            
         )
+    def forward(self, x):
+        y = self.AE.g_a(x)
+        ce = self.calc_cross_entropy(y)
+        z_likelihoods = torch.tensor(1)
+        y_hat, y_id, commit, usage, y_mse_list = self.vq(y)  # (b, Q, w, h), (b, Q, w, h), (Q), (Q), (Q)
+        x_hat = self.AE.g_s(y_hat)
+        return {
+            "y":y,
+            "y_hat":y_hat,
+            "y_mse_list": y_mse_list,
+            "x_hat": x_hat,
+            "likelihoods": z_likelihoods,
+            "commit": commit,
+            "usage": usage,
+            "cross": ce,
+        }
         
+
 # done
 class classifier(nn.Module):
     def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256]):

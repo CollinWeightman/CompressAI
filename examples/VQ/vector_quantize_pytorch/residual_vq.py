@@ -2,6 +2,7 @@ from functools import partial
 import torch
 from torch import nn
 from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
+import torch.nn.functional as F
 
 class ResidualVQ(nn.Module):
     """ Follows Algorithm 1. in https://arxiv.org/pdf/2107.03312.pdf """
@@ -57,6 +58,7 @@ class VariableRVQ(nn.Module):
         self.CB_size_list = CB_size_list        
     def forward(self, x):
         quantized_out = torch.zeros_like(x)
+        mse_list = []
         residual = x
         for i, layer in enumerate(self.layers):
             quantized, indices, loss, usage = layer(residual)
@@ -65,8 +67,10 @@ class VariableRVQ(nn.Module):
             indices_cat = indices.unsqueeze(1) if i == 0 else torch.cat([indices_cat, indices.unsqueeze(1)], 1)
             loss_cat = loss if i == 0 else torch.cat([loss_cat, loss], 0)
             usage = usage.unsqueeze(0)
-            perplexity_cat = usage if i == 0 else torch.cat([perplexity_cat, usage], 0)            
-        return quantized_out, indices_cat, loss_cat, perplexity_cat # (b, Q, w, h), (b, Q, w, h), (b), (b)
+            perplexity_cat = usage if i == 0 else torch.cat([perplexity_cat, usage], 0)
+            mse_list.append(F.mse_loss(x, quantized_out))
+                        
+        return quantized_out, indices_cat, loss_cat, perplexity_cat, mse_list # (b, Q, w, h), (b, Q, w, h), (b), (b)
 
 class MultiLayerVQ(nn.Module):
     def __init__(

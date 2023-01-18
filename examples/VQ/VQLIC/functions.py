@@ -350,25 +350,24 @@ def log_net_summery(
     dim_num = args.vector_dim // args.quantizers
     for i in range(args.quantizers):
         dim_list.append(dim_num)
-        
     if not usage.shape == torch.Size([]):
-        for i in range(args.quantizers):    
+        for i in range(len(usage)):    
             start = 0 if i == 0 else sum(dim_list[:i])
             end = dim_list[0] if i == 0 else sum(dim_list[:i+1])
-            mse = F.mse_loss(y[:, start:end], y_hat[:, start:end])    
+            mse = F.mse_loss(y[:, start:end], y_hat[:, start:end]) if not args.model=="variabel_RVQ" else F.mse_loss(y, y_hat)
             mse_list.append(mse.item())
             usage_list.append(usage[i].item())
     else:
         mse = F.mse_loss(y, y_hat)
         mse_list.append(mse.item())
         usage_list.append(usage.item())
-
+        
     log_s = log_s + f"usage"
-    for i in range(args.quantizers):
+    for i in range(len(usage_list)):
         log_s = (log_s + f",{usage_list[i]}") 
     log_s = log_s + f"\n part_mse"
-    for i in range(args.quantizers):
-        log_s = (log_s + f",{mse_list[i]}" )        
+    for i in range(len(mse_list)):
+        log_s = (log_s + f",{mse_list[i]}" ) if not args.model == "variable_RVQ" else (log_s + f",{out_net['y_mse_list'][i]}" )
     log_s = log_s + '\n\n'
     with open('finish_record.csv','a') as f:        
         f.write(log_s)

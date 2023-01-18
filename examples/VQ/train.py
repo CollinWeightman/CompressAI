@@ -167,7 +167,6 @@ def main(argv):
             CB = CB_size
         elif args.model == "variable_RVQ":
             cbs_list = get_variable_lists_RVQ(args.RVQ_start_bits - i)
-            print('in')
         elif not args.model == "variable_dims":
             CB_index = int(9 - math.log2(args.codebook_size))
             CB = CB_size[CB_index:]
