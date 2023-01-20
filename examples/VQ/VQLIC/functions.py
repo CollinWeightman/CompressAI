@@ -135,7 +135,7 @@ def configure_optimizers(net):
 
     assert len(inter_params) == 0
     assert len(union_params) - len(params_dict.keys()) == 0
-
+    
     optimizer = optim.Adam((params_dict[n] for n in sorted(parameters)), lr=1e-4,)
     out = []
     out.append(optimizer)
@@ -159,7 +159,7 @@ def configure_optimizers_separate(net):
         for n, p in net.named_parameters()
         if n.endswith(".quantiles") and p.requires_grad
     }
-    
+        
     params_dict = dict(net.named_parameters())
     inter_params = parameters & aux_parameters
     union_params = parameters | aux_parameters

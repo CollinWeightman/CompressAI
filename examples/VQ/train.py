@@ -63,9 +63,6 @@ def parse_args(argv):
         default=4,
         help="Dataloaders threads (default: %(default)s)",
     )
-    
-
-    
     parser.add_argument(
         "--batch-size", type=int, default=16, help="Batch size (default: %(default)s)"
     )
@@ -189,9 +186,6 @@ def main(argv):
             net = picked_model(128, dim_list, 4, cbs_list)
         elif (args.model == "variable_RVQ"):
             net = picked_model(128, args.vector_dim, len(cbs_list), cbs_list)
-            
-            
-            
         else:
             net = picked_model(N=128, dim=args.vector_dim, quantizers = args.quantizers, CB_size=CB[i])
         net = net.to(device)
