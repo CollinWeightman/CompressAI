@@ -9,6 +9,16 @@ from torchvision import transforms
 from pytorch_msssim import ms_ssim
 import os
 
+# LPIPS
+import lpips
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+loss_fn_alex = lpips.LPIPS(net='alex').to(device) # best forward scores
+loss_fn_vgg = lpips.LPIPS(net='vgg').to(device) # closer to "traditional" perceptual loss, when used for optimization
+
+
+
 class AE_loss(nn.Module):
     def __init__(self, lmbda=1e-2):
         super().__init__()
@@ -268,6 +278,9 @@ def eval_images(net, dir_path, version, data_ch_bpp):
         psnr.update(retval[0])
         msssim.update(retval[1])
         bitrate.update(retval[2])
+    with open('pic_log.csv', 'a') as f:
+        f.write('\n')   
+    
     
     return psnr.avg, msssim.avg, bitrate.avg
 
@@ -291,7 +304,10 @@ def eval_image(net, img_path, version, data_ch_bpp):
     psnr = compute_psnr(x, out_net["x_hat"])
     msssim = compute_msssim(x, out_net["x_hat"])
     bitrate = compute_bpp(out_net) + data_ch_bpp
-    log_s = f"{version}_{int(data_ch_bpp*8*8)}, {os.path.basename(img_path)}, {psnr}, {msssim}, {bitrate}\n"
+    alex = loss_fn_alex(x, out_net["x_hat"])
+    vgg = loss_fn_vgg(x, out_net["x_hat"])
+
+    log_s = f"{version}_{int(data_ch_bpp*8*8)}, {os.path.basename(img_path)}, {psnr}, {msssim}, {alex.item()}, {vgg.item()}, {bitrate}\n"
     with open('pic_log.csv', 'a') as f:
         f.write(log_s)
     return psnr, msssim, bitrate

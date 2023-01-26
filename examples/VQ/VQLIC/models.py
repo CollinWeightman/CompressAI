@@ -16,10 +16,10 @@ import math
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 from vector_quantize_pytorch.vector_quantize_pytorch import VectorQuantize
-from vector_quantize_pytorch.residual_vq import HierarchicalVQ, VariableRVQ, BlockVQ
+from vector_quantize_pytorch.residual_vq import HierarchicalVQ, VariableRVQ, BlockVQ, MultiLayerVQ
 from torchvision.models import resnet50, ResNet50_Weights, resnet152, ResNet152_Weights
 
-from .resnet import BasicBlock
+from .resnet import BasicBlock, ResNet, ResNet34, Bottleneck, ResNet50
 
 def build_net(mode, N, dim):
     if mode == 'ga':
@@ -237,9 +237,8 @@ class VQVAE(nn.Module):
                 decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
                 commitment_weight = 0.25,   # the weight on the commitment loss
                 accept_image_fmap = True,
-                threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2
-                kmeans_init = True,   # set to True
-                kmeans_iters = 10,     # number of kmeans iterations to calculate the centroids for the codebook on init                
+                threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2
+                
             )
         elif quantizers > 1:
             self.vq = MultiLayerVQ(
@@ -249,9 +248,8 @@ class VQVAE(nn.Module):
                 decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
                 commitment_weight = 0.25,   # the weight on the commitment loss
                 accept_image_fmap = True,
-                threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2                
-                kmeans_init = True,   # set to True
-                kmeans_iters = 10,    # number of kmeans iterations to calculate the centroids for the codebook on init
+                threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2
+                
             )
             
     def load_AE(self, path):
@@ -311,8 +309,6 @@ class variable_RVQ(VQVAE):
             commitment_weight = 0.25,   # the weight on the commitment loss
             accept_image_fmap = True,
             threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2
-            kmeans_init = True,   # set to True
-            kmeans_iters = 10,    # number of kmeans iterations to calculate the centroids for the codebook on init            
         )
     def forward(self, x):
         y = self.AE.g_a(x)
@@ -351,52 +347,90 @@ class VQVAE_variable_dims(VQVAE):
             threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2
         )
 
-# done
-# class classifier(nn.Module):
-#     def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256]):
-#         super().__init__()
-#         self.in_net = VQVAE_variable_dims(N, dim_list, quantizers, CB_size_list)
-#         self.in_dim = sum(dim_list[:take_part])
-#         self.batch_size = batch_size
-#         self.classes = classes        
-#         self.in_cls_side_len = input_side_len // 8
-#         self.cls_cnn = conv3x3(self.in_dim, 3)
-#         self.cls_resnet = resnet152(weights=ResNet152_Weights.DEFAULT, progress=False).to(device)
-#     def forward(self, x):
-#         fmaps = self.in_net.AE.g_a(x)
-#         in_cnn = fmaps[:,:self.in_dim]
-#         out_cnn = self.cls_cnn(in_cnn)
-#         predict = self.cls_resnet(out_cnn)
-#         return predict
+class ResNet_m(ResNet):
+    def __init__(self, block, num_blocks, in_dim, num_classes=10):
+        super().__init__(block, num_blocks, num_classes)
+        self.conv1 = nn.Conv2d(in_dim, 64, kernel_size=3, stride=1, padding=1, bias=False)
+def ResNet34_m(in_dim):
+    return ResNet_m(BasicBlock, [3, 4, 6, 3], in_dim)
+def ResNet50_m(in_dim):
+    return ResNet_m(Bottleneck, [3, 4, 6, 3], in_dim)
 
 class classifier(nn.Module):
-    def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256]):
+    def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256], reset_vq = False):
         super().__init__()
         self.in_net = VQVAE_variable_dims(N, dim_list, quantizers, CB_size_list)
+        if reset_vq:
+            self.in_net.vq = HierarchicalVQ(
+                num_quantizers = quantizers,
+                dim_list = dim_list,
+                CB_size_list = CB_size_list,    # codebook size
+                decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
+                commitment_weight = 0.25,   # the weight on the commitment loss
+                accept_image_fmap = True,
+                threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2
+                kmeans_init = True,   # set to True
+                kmeans_iters = 10,    # number of kmeans iterations to calculate the centroids for the codebook on init
+            )
         self.in_dim = sum(dim_list[:take_part])
         self.batch_size = batch_size
         self.classes = classes        
         self.in_cls_side_len = input_side_len // 8
         
-        self.cls_resnet = nn.Sequential(
-            BasicBlock(self.in_dim, self.in_dim),
-            BasicBlock(self.in_dim, self.in_dim),
-            BasicBlock(self.in_dim, self.in_dim),
-        )
-        self.cls_linear = nn.Sequential(
-            nn.Linear(self.in_dim * self.in_cls_side_len * self.in_cls_side_len, 256),
-            nn.Linear(256, 32),
-            nn.Linear(32, classes),
-            nn.Softmax(1),
-        )        
+        self.inres = nn.Upsample(scale_factor=8)
+        self.cls_resnet = ResNet50_m(self.in_dim)
     def forward(self, x):
-        fmaps = self.in_net.AE.g_a(x)
-        in_res = fmaps[:,:self.in_dim]
-        out_res = self.cls_resnet(in_res)
-        flat = out_res.reshape(self.batch_size, -1)        
-        predict = self.cls_linear(flat)        
-        return predict
+        y = self.in_net.AE.g_a(x)
+        y_hat, y_id, c, u = self.in_net.vq(y)
+        in_res = y_hat[:,:self.in_dim]
+        out_inres = self.inres(in_res)
+        out_res = self.cls_resnet(out_inres)
+        return out_res
 
+class classifier_fine_turing(nn.Module):
+    def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256], reset_vq = False):
+        super().__init__()
+        self.in_net = VQVAE_variable_dims(N, dim_list, quantizers, CB_size_list)
+        self.in_dim = sum(dim_list[:take_part])
+        self.batch_size = batch_size
+        self.classes = classes
+        self.cls_inres = nn.Sequential(
+            AttentionBlock(self.in_dim),
+            ResidualBlock(self.in_dim, self.in_dim),
+            ResidualBlockUpsample(self.in_dim, N, 2),
+            AttentionBlock(N),
+            ResidualBlock(N, N),
+            ResidualBlockUpsample(N, N, 2),
+            AttentionBlock(N),
+            ResidualBlock(N, N),
+            subpel_conv3x3(N, 3, 2),
+        )
+        self.cls_resnet = ResNet50()
+    def forward(self, x):
+        y = self.in_net.AE.g_a(x)
+        y_hat, y_id, c, u = self.in_net.vq(y)
+        in_res = y_hat[:,:self.in_dim]
+        out_inres = self.inres(in_res)
+        out_res = self.cls_resnet(out_inres)
+        return out_res
+    
+
+class classifier_full_decode(nn.Module):
+    def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256], reset_vq = False):
+        super().__init__()
+        self.in_net = VQVAE_variable_dims(N, dim_list, quantizers, CB_size_list)
+        self.in_dim = 96
+        self.batch_size = batch_size
+        self.classes = classes        
+        self.in_cls_side_len = input_side_len // 8
+        self.cls_resnet = ResNet50()
+    def forward(self, x):
+        y = self.in_net.AE.g_a(x)
+        y_hat, y_id, c, u = self.in_net.vq(y)
+        x_hat = self.in_net.AE.g_s(y_hat)
+        out_res = self.cls_resnet(x_hat)
+        return out_res
+    
 class Adapt_VQ(VQVAE):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
         super().__init__(N, dim, quantizers, CB_size)
@@ -523,7 +557,7 @@ class Adapt_VQ_direct(Adapt_VQ):
     def forward(self, x):
         y = self.AE.g_a(x)
         y_std, ce, z_likelihoods, scales_hat, means_hat, gp, gp_hat = self.direct_calc_gaussian(y)
-        y_hat, id, commit, usage = self.vq(y_std)  # (b, Q, w, h), (b, Q, w, h), (b), (b)
+        y_hat, y_id, commit, usage = self.vq(y_std)  # (b, Q, w, h), (b, Q, w, h), (b), (b)
         y_hat_ = self.destandardized(y_hat, scales_hat, means_hat) if hyper_enable else y_hat
         x_hat = self.AE.g_s(y_hat_)
 
@@ -537,15 +571,6 @@ class Adapt_VQ_direct(Adapt_VQ):
             "gp_hat": gp_hat,            
         }
 
-    
-#     def __init__(
-#         self,
-#         *,
-#         block_len,
-#         CB_size_list,
-#         **kwargs
-#     ):
-    
 class block_VQ(VQVAE):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512, block_len = 8):
         super().__init__(N, dim, quantizers, CB_size)
@@ -554,20 +579,8 @@ class block_VQ(VQVAE):
             CB_size_list = [CB_size for i in range(dim)],
             decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
             commitment_weight = 0.25,   # the weight on the commitment loss
-            kmeans_init = True,   # set to True
-            kmeans_iters = 10,    # number of kmeans iterations to calculate the centroids for the codebook on init                
             threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2         
         )
-# vq = BlockVQ(
-#     block_len = 8,
-#     CB_size_list = [64 for i in range(64)],    # codebook size
-#     decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
-#     commitment_weight = 0.25,   # the weight on the commitment loss
-#     kmeans_init = True,   # set to True
-#     kmeans_iters = 10,    # number of kmeans iterations to calculate the centroids for the codebook on init                
-#     threshold_ema_dead_code = 2  # should actively replace any codes that have an exponential moving average cluster size less than 2         
-# ).to(device)
-    
     
 def get_model(model_name="VQVAE"):
     if model_name == "AutoEncoder":
@@ -584,6 +597,10 @@ def get_model(model_name="VQVAE"):
         return Scaler_AE
     elif model_name == "classifier":
         return classifier
+    elif model_name == "classifier_FD":
+        return classifier_full_decode
+    elif model_name == "classifier_FT":
+        return classifier_fine_turing    
     elif model_name =="Adapt_VQ_5":
         return Adapt_VQ_5
     elif model_name == "variable_RVQ":

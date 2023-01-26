@@ -131,7 +131,6 @@ def main(argv):
     test_transforms = transforms.Compose(
         [transforms.CenterCrop(args.patch_size), transforms.ToTensor()]
     )
-
     train_dataset = ImageFolder(args.dataset, split="train", transform=train_transforms)
     test_dataset = ImageFolder(args.dataset, split="test", transform=test_transforms)
 
@@ -152,9 +151,7 @@ def main(argv):
         shuffle=False,
         pin_memory=(device == "cuda"),
     )
-#     variable_RVQ -i 3 -e 1
-    
-    CB_size = [512, 256, 128, 64, 32, 16, 8, 4, 2]    
+    CB_size = [512, 256, 128, 64, 32, 16, 8, 4, 2]
     for i in range(args.iterations):
         log_s = f'loss, mse, bpp, aux, psnr\n'
         with open('log_training.csv', 'a') as f:
