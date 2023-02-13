@@ -361,7 +361,7 @@ class classifier(nn.Module):
         super().__init__()
         self.in_net = VQVAE_variable_dims(N, dim_list, quantizers, CB_size_list)
         if reset_vq:
-            self.in_net.vq = HierarchicalVQ(
+            self.vq = HierarchicalVQ(
                 num_quantizers = quantizers,
                 dim_list = dim_list,
                 CB_size_list = CB_size_list,    # codebook size
@@ -372,21 +372,47 @@ class classifier(nn.Module):
                 kmeans_init = True,   # set to True
                 kmeans_iters = 10,    # number of kmeans iterations to calculate the centroids for the codebook on init
             )
+        else: 
+            self.vq = self.in_net.vq
         self.in_dim = sum(dim_list[:take_part])
         self.batch_size = batch_size
-        self.classes = classes        
+        self.classes = classes
         self.in_cls_side_len = input_side_len // 8
         
         self.inres = nn.Upsample(scale_factor=8)
         self.cls_resnet = ResNet50_m(self.in_dim)
     def forward(self, x):
         y = self.in_net.AE.g_a(x)
-        y_hat, y_id, c, u = self.in_net.vq(y)
+        y_hat, y_id, c, u = self.vq(y)
         in_res = y_hat[:,:self.in_dim]
         out_inres = self.inres(in_res)
         out_res = self.cls_resnet(out_inres)
         return out_res
 
+class classifier_simple_cnn(classifier):
+    def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256], reset_vq = False):
+        super().__init__(take_part, classes, input_side_len, batch_size, N, dim_list, quantizers, CB_size_list, reset_vq)
+        self.cls_cnn = nn.Sequential(
+            BasicBlock( self.in_dim,  self.in_dim),
+            BasicBlock( self.in_dim,  self.in_dim),
+            BasicBlock( self.in_dim,  self.in_dim),
+        )
+        self.cls_line = nn.Sequential(
+            nn.Linear(self.in_cls_side_len * self.in_cls_side_len * self.in_dim, 128),
+            nn.Linear(128, 32),
+            nn.Linear(32, 10),
+            nn.Softmax(1),
+        )
+    def forward(self, x):
+        y = self.in_net.AE.g_a(x)
+        y_hat, y_id, c, u = self.vq(y)
+        in_res = y_hat[:,:self.in_dim]
+        out_cnn = self.cls_cnn(in_res)
+        out_cnn_flat = out_cnn.reshape(self.batch_size, -1)                
+        out_line = self.cls_line(out_cnn_flat)        
+        return out_line
+        
+        
 class classifier_fine_turing(nn.Module):
     def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256], reset_vq = False):
         super().__init__()
@@ -414,15 +440,14 @@ class classifier_fine_turing(nn.Module):
         out_res = self.cls_resnet(out_inres)
         return out_res
     
-
 class classifier_full_decode(nn.Module):
     def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256], reset_vq = False):
         super().__init__()
         self.in_net = VQVAE_variable_dims(N, dim_list, quantizers, CB_size_list)
-        self.in_dim = 96
         self.batch_size = batch_size
-        self.classes = classes        
-        self.in_cls_side_len = input_side_len // 8
+        self.classes = classes
+        self.in_dim = 3
+        self.in_cls_side_len = input_side_len
         self.cls_resnet = ResNet50()
     def forward(self, x):
         y = self.in_net.AE.g_a(x)
@@ -430,6 +455,30 @@ class classifier_full_decode(nn.Module):
         x_hat = self.in_net.AE.g_s(y_hat)
         out_res = self.cls_resnet(x_hat)
         return out_res
+    
+class classifier_full_decode_simple_cnn(classifier_full_decode):
+    def __init__(self, take_part, classes, input_side_len, batch_size=16, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256], reset_vq = False):
+        super().__init__(take_part, classes, input_side_len, batch_size, N, dim_list, quantizers, CB_size_list, reset_vq)
+        self.in_cls_side_len = input_side_len // 8
+        self.cls_cnn = nn.Sequential(
+            BasicBlock( 3,  64, 2),
+            BasicBlock( 64, 64, 2),
+            BasicBlock( 64, 64, 2),
+        )
+        self.cls_line = nn.Sequential(
+            nn.Linear(self.in_cls_side_len * self.in_cls_side_len * 64, 128),
+            nn.Linear(128, 32),
+            nn.Linear(32, 10),
+            nn.Softmax(1),
+        )
+    def forward(self, x):
+        y = self.in_net.AE.g_a(x)
+        y_hat, y_id, c, u = self.in_net.vq(y)
+        x_hat = self.in_net.AE.g_s(y_hat)        
+        out_cnn = self.cls_cnn(x_hat)
+        out_cnn_flat = out_cnn.reshape(self.batch_size, -1)                
+        out_line = self.cls_line(out_cnn_flat)        
+        return out_line
     
 class Adapt_VQ(VQVAE):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
@@ -460,6 +509,7 @@ class Adapt_VQ(VQVAE):
         scales_hat, means_hat = gaussian_params.chunk(2, 1)
         y_std, ce = self.standardized(y, means_hat, scales_hat)
         return y_std, ce, z_likelihoods, scales_hat, means_hat, z, z_hat
+
     def aux_loss(self):
         aux_loss = sum(
             m.loss() for m in self.modules() if isinstance(m, EntropyBottleneck)
@@ -471,7 +521,6 @@ class Adapt_VQ(VQVAE):
         y_std_hat, y_id, commit, usage = self.vq(y_std)  # (b, Q, w, h), (b, Q, w, h), (b), (b)
         y_hat = self.destandardized(y_std_hat, scales_hat, means_hat)
         x_hat = self.AE.g_s(y_hat)
-
         return {
             "y": y,
             "y_std":y_std,
@@ -487,7 +536,41 @@ class Adapt_VQ(VQVAE):
             "scales_hat":scales_hat,
             "means_hat":means_hat,
         }
-
+class AVQ_variable_length(Adapt_VQ):
+    def __init__(self, N=128, dim_list = [8, 8, 24, 24], quantizers=4, CB_size_list = [128, 128, 32, 32]):
+        super().__init__(N, sum(dim_list), quantizers, CB_size_list[0])
+        self.dim = sum(dim_list)
+        self.dim_list = dim_list
+        self.CB_size_list = CB_size_list
+        self.vq = HierarchicalVQ(
+            num_quantizers = quantizers,
+            dim_list = dim_list,
+            CB_size_list = CB_size_list,    # codebook size
+            decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
+            commitment_weight = 0.25,   # the weight on the commitment loss
+            accept_image_fmap = True,
+            threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2
+        )    
+# class VQVAE_variable_dims(VQVAE):
+#     def __init__(self, N=128, dim_list = [8, 8, 16, 32], quantizers=4, CB_size_list = [256, 256, 256, 256]):
+#         if (not type(CB_size_list) == list) or (not type(dim_list) == list) or (not len(CB_size_list) == len(dim_list)):
+#             print('init error')        
+#         super().__init__(N, sum(dim_list), quantizers, CB_size_list[0])
+#         self.dim = sum(dim_list)            
+#         self.dim_list = dim_list
+#         self.CB_size_list = CB_size_list
+#         # overriding self.vq
+#         self.vq = HierarchicalVQ(
+#             num_quantizers = quantizers,
+#             dim_list = dim_list,
+#             CB_size_list = CB_size_list,    # codebook size
+#             decay = 0.99,               # the exponential moving average decay, lower means the dictionary will change faster
+#             commitment_weight = 0.25,   # the weight on the commitment loss
+#             accept_image_fmap = True,
+#             threshold_ema_dead_code = 2,  # should actively replace any codes that have an exponential moving average cluster size less than 2
+#         )
+    
+    
 # Discard    
 class Adapt_VQ_5(Adapt_VQ):
     def __init__(self, N=128, dim=64, quantizers=1, CB_size=512):
@@ -600,7 +683,9 @@ def get_model(model_name="VQVAE"):
     elif model_name == "classifier_FD":
         return classifier_full_decode
     elif model_name == "classifier_FT":
-        return classifier_fine_turing    
+        return classifier_fine_turing
+    elif model_name == "classifier_cnn":
+        return classifier_simple_cnn       
     elif model_name =="Adapt_VQ_5":
         return Adapt_VQ_5
     elif model_name == "variable_RVQ":
@@ -609,6 +694,10 @@ def get_model(model_name="VQVAE"):
         return FTVQ
     elif model_name =="block_VQ":
         return block_VQ
+    elif model_name =="classifier_fd_cnn":
+        return classifier_full_decode_simple_cnn
+    elif model_name =="avq_VL":
+        return AVQ_variable_length
     else:
         print('search failed! return default: AE')
         return AutoEncoder

@@ -157,16 +157,16 @@ def main(argv):
         with open('log_training.csv', 'a') as f:
             f.write(log_s)
         picked_model = get_model(args.model)
-        if args.codebook_size == 0 and (not (args.model == "variable_dims" or args.model == "variable_RVQ")):
+        if args.codebook_size == 0 and (not (args.model == "variable_dims" or args.model == "variable_RVQ" or args.model == "avq_VL")):
             CB = CB_size
         elif args.model == "variable_RVQ":
             cbs_list = get_variable_lists_RVQ(args.RVQ_start_bits - i)
-        elif not args.model == "variable_dims":
+        elif not (args.model == "variable_dims" or args.model == "avq_VL"):
             CB_index = int(9 - math.log2(args.codebook_size))
             CB = CB_size[CB_index:]
         else:
             if i == 7:
-                break                
+                break
             vmode = args.variable_mode if (args.iterations == 1) else i
             dim_list, cbs_list = get_variable_dc(vmode)
             
@@ -177,16 +177,17 @@ def main(argv):
         else:
             version = f'{args.model}_{args.quantizers}'
 
+#             avq_variable_length
+            
         if (args.model == "AutoEncoder"):
             net = picked_model(N=128, dim=args.vector_dim)
-        elif (args.model == "variable_dims"):
+        elif (args.model == "variable_dims" or args.model == "avq_VL"):
             net = picked_model(128, dim_list, 4, cbs_list)
         elif (args.model == "variable_RVQ"):
             net = picked_model(128, args.vector_dim, len(cbs_list), cbs_list)
         else:
             net = picked_model(N=128, dim=args.vector_dim, quantizers = args.quantizers, CB_size=CB[i])
         net = net.to(device)
-
         if not args.pretrained == "":
             net.load_AE(args.pretrained)
         
@@ -215,7 +216,7 @@ def main(argv):
                 break
         time_end = time.time()
         time_min = (time_end - time_start) / 60                
-        if args.model == "variable_dims":
+        if args.model == "variable_dims" or args.model == "avq_VL":
             save_model(net, version, f'mode={vmode}')
         elif args.model == "variable_RVQ":
             save_model(net, version, f'{args.RVQ_start_bits - i}')            
@@ -227,7 +228,7 @@ def main(argv):
                 d = d.to(device)
                 out_net = net(d)
                 
-        if (args.model == "variable_dims"):
+        if (args.model == "variable_dims" or args.model == "avq_VL"):
             data_ch_bpp = 24 / 8 / 8
         elif (args.model == "variable_RVQ"):
             data_ch_bpp = (args.RVQ_start_bits - i) / 8 / 8
